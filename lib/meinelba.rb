@@ -48,7 +48,7 @@ class MeinELBA
     uri = URI.parse(@agent.page.header['location'])
     @accessToken = URI.decode_www_form(uri.fragment).assoc('access_token').last
 
-    @konten = api_get('pfp-pfm/kontozentrale-ui-services/rest/kontozentrale/konten')
+    @konten = api_get('pfp-pfm/vermoegen-ui-services/rest/vermoegen/konten')
   end
 
   def balance(iban)
