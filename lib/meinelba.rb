@@ -9,8 +9,11 @@ class MeinELBA
     h.logout
   end
 
-  def initialize(madn, vfnr, pin)
+  def initialize(user, pin)
+    user = user.upcase
+
     @agent = Mechanize.new
+    @accessToken = ''
 
     @agent.get('https://mein.elba.raiffeisen.at')
     m = /window\.location\s*=\s*'(?<url>[^']*)'/.match(@agent.page.body)
@@ -19,22 +22,24 @@ class MeinELBA
     loginForm = @agent.page.forms()[0]
     loginForm.submit nil, {'Origin' => 'https://sso.raiffeisen.at'}
 
-    loginForm = @agent.page.form_with(:name => 'loginCenterRedirect')
-    loginForm.field_with(:name => 'resumeHostLC').value = 'https://sso.raiffeisen.at'
-    loginForm.field_with(:name => 'currentUrl').value = @agent.page.uri.to_s
-    loginForm.submit
+    api_get('quer-kunde-login/kunde-login-ui-services/rest/config/context')
+    api_get('quer-kunde-login/kunde-login-ui-services/rest/identify')
+    api_post('quer-kunde-login/kunde-login-ui-services/rest/identify/' + user, '')
 
-    loginForm = @agent.page.form_with(:name => 'loginform')
-    loginForm.field_with(:name => 'loginform:LOGINMAND').value = madn
-    loginForm.field_with(:name => 'loginform:LOGINVFNR').value = vfnr
-    loginForm.add_field!('loginform:checkVerfuegereingabe', 'loginform:checkVerfuegereingabe')
-    loginForm.submit
+    loginData = {"verfuegerNr" => user, "pinHash" => Digest::SHA256.hexdigest(pin), "profile" => "", "bankengruppe" => "rbg"}
+    # api_post('quer-kunde-login/kunde-login-ui-services/rest/login/pin', JSON.generate(loginData))
+    @agent.post('https://sso.raiffeisen.at/api/quer-kunde-login/kunde-login-ui-services/rest/login/pin', JSON.generate(loginData), {'Content-Type' => 'application/json;charset=UTF-8'})
 
-    loginForm = @agent.page.form_with(:name => 'loginpinform')
-    loginForm.field_with(:name => 'loginpinform:LOGINPIN').value = pin
-    loginForm.field_with(:name => 'loginpinform:PIN').value = '*****'
-    loginForm.add_field!('loginpinform:anmeldenPIN', 'loginpinform:anmeldenPIN')
-    loginForm.submit
+    # api_get('quer-kunde-login/kunde-login-ui-services/rest/identify/pushTanOnboarding')
+
+    loginData = {"updateSession" => false, "accounts" => nil}
+    # api_post('quer-kunde-login/kunde-login-ui-services/rest/login', JSON.generate(loginData))
+    @agent.post('https://sso.raiffeisen.at/api/quer-kunde-login/kunde-login-ui-services/rest/login', JSON.generate(loginData), {'Content-Type' => 'application/json;charset=UTF-8'})
+
+    @agent.redirect_ok = false
+    @agent.get(URI.parse(JSON.parse(@agent.page.body)['resumeUrl']))
+    location = URI.parse(@agent.page.header['location'])
+    @agent.get(location)
 
     opt = {
       'response_type' => 'token',
@@ -43,12 +48,15 @@ class MeinELBA
       'redirect_uri' => 'https://mein.elba.raiffeisen.at/pfp-widgetsystem/',
       'state' => SecureRandom.hex(52)
     }
-    @agent.redirect_ok = false
     @agent.get('https://sso.raiffeisen.at/as/authorization.oauth2', opt)
     uri = URI.parse(@agent.page.header['location'])
     @accessToken = URI.decode_www_form(uri.fragment).assoc('access_token').last
 
     @konten = api_get('pfp-pfm/vermoegen-ui-services/rest/vermoegen/konten')
+  end
+
+  def accessToken()
+    return @accessToken
   end
 
   def balance(iban)
@@ -112,7 +120,11 @@ class MeinELBA
   end
 
   def headers
-    { 'Authorization' => "Bearer #{@accessToken}", 'Content-Type' => 'application/json'}
+    if @accessToken.length > 50
+      { 'Authorization' => "Bearer #{@accessToken}", 'Content-Type' => 'application/json;charset=UTF-8'}
+    else
+      { 'Content-Type' => 'application/json;charset=UTF-8'}
+    end
   end
 
   def parse(file)
@@ -120,15 +132,23 @@ class MeinELBA
   end
 
   def api_url(url)
-    "https://mein.elba.raiffeisen.at/api/#{url}"
+    if @accessToken.length > 50
+      "https://mein.elba.raiffeisen.at/api/#{url}"
+    else
+      "https://sso.raiffeisen.at/api/#{url}"
+    end
   end
 
-  def api_get(url)
-    parse(@agent.get(api_url(url), [], nil, headers))
+  def api_get(url, params = [])
+    parse(@agent.get(api_url(url), params, nil, headers))
   end
 
   def api_post(url, data)
-    parse(@agent.post(api_url(url), JSON.generate(data), headers))
+    if data != ''
+      parse(@agent.post(api_url(url), JSON.generate(data), headers))
+    else
+      parse(@agent.post(api_url(url), '', headers))
+    end
   end
 
 end
